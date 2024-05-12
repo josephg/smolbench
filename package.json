@@ -1,6 +1,6 @@
 {
   "name": "smolbench",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Simple 0dep nodejs benchmarking library",
   "main": "dist/index.js",
   "type": "commonjs",
