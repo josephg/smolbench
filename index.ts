@@ -29,7 +29,7 @@ const defaultOpts: BenchOpts = {
 export interface BenchmarkReport {
   meanTime: number,
   options: BenchOpts,
-  // Samples times?
+  sampleTimes: number[],
 }
 
 export const reports: Record<string, BenchmarkReport> = {}
@@ -46,7 +46,28 @@ const round = (n: number): number => (
     : Math.round(n)
 )
 
-export function bench(options: BenchOpts | string, fn: () => void) {
+export type FancyFn = (bench: (f: () => void) => void) => void
+function run1(fn: FancyFn): number {
+  let start = 0, end = 0, run = false
+  fn((f) => {
+    start = performance.now()
+    f()
+    end = performance.now()
+    run = true
+  })
+
+  if (!run) throw Error('Benchmark must run iteration function')
+  return end - start
+}
+
+// run1(b => {
+//   // setup
+//   b(() => {
+//     // test
+//   })
+// })
+
+export function benchFancy(options: BenchOpts | string, fn: FancyFn) {
   const opts: BenchOpts =
     options == null ? defaultOpts
     : typeof options === 'string' ? { ...defaultOpts, name: options }
@@ -54,40 +75,54 @@ export function bench(options: BenchOpts | string, fn: () => void) {
 
   // First, we'll run it for 3 seconds to warm up the JS VM.
 
-  let start = performance.now()
-  let end
+  // let start = performance.now()
+  // let end
   let warmupCount = 0
+  let warmupTime = 0
   if (!opts.quiet) console.warn(`Running test ${opts.name ?? 'unknown'}. Warmup for ${round(opts.warmupTime / 1000)} seconds...`)
   do {
-    fn()
+    warmupTime += run1(fn)
+    // fn()
     warmupCount++
-    end = performance.now()
-  } while (end - start < opts.warmupTime)
+    // end = performance.now()
+  } while (warmupCount < 4 || warmupTime < opts.warmupTime)
 
-  if (!opts.quiet) console.warn(`Did ${warmupCount} iterations in ${round(end - start)} ms (Estimate: ${round((end - start) / warmupCount)} ms)`)
+  if (!opts.quiet) console.warn(`Did ${warmupCount} iterations in ${round(warmupTime)} ms (Estimate: ${round(warmupTime / warmupCount)} ms)`)
 
-  let timePerIteration = (end - start) / warmupCount
+  let timePerIteration = warmupTime / warmupCount
 
   // We want to run for at least 100 samples and run for 10 seconds.
   const samples = Math.max(opts.samples, Math.floor(opts.testTime / timePerIteration))
   if (!opts.quiet) console.warn(`Running ${samples} samples in an estimated ${round(timePerIteration * samples / 1000)} seconds`)
 
   // TODO: Consider discarding
-  start = performance.now()
+  // start = performance.now()
+  const sampleTimes = []
+  let totalTime = 0
   for (let i = 0; i < samples; i++) {
-    fn()
+    // fn()
+    const time = run1(fn)
+    totalTime += time
+    sampleTimes.push(time)
   }
-  end = performance.now()
-  timePerIteration = (end - start) / samples
+  // end = performance.now()
+  timePerIteration = totalTime / samples
 
   if (!opts.quiet) console.warn(`Time per iteration: ${round(timePerIteration)} ms`)
 
   if (opts.name != null) {
     reports[opts.name] = {
-      meanTime: timePerIteration, options: opts
+      sampleTimes,
+      meanTime: timePerIteration,
+      options: opts,
     }
   }
 }
+
+export function bench(options: BenchOpts | string, fn: () => void) {
+  benchFancy(options, b => { b(fn) })
+}
+
 
 export function saveReportsSync(filename = 'report.json') {
   // Try to merge the report with other reports.
@@ -108,4 +143,24 @@ export function saveReportsSync(filename = 'report.json') {
   const merged = {...currentReports, ...reports}
   fs.writeFileSync(filename, JSON.stringify(merged, null, 2))
   console.warn('Saved benchmarking reports to', filename)
+}
+
+
+export function reportTable(filename?: string) {
+  let r = { ...reports }
+
+  if (filename != null) {
+    const fileReports = JSON.parse(fs.readFileSync(filename, 'utf8'))
+    if (typeof fileReports !== 'object' || fileReports == null) {
+      throw Error('Report file is not an object')
+    }
+    r = {...r, ...fileReports}
+  }
+
+
+  const tableData: Record<string, any> = {}
+  for (const name in r) {
+    tableData[name] = {mean: round(r[name].meanTime)}
+  }
+  console.table(tableData)
 }
